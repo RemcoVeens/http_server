@@ -5,13 +5,16 @@ import (
 	"fmt"
 	"log"
 	"net/http"
-	"regexp"
-	"strings"
 	"sync/atomic"
+
+	"github.com/RemcoVeens/httpserver/internal/database"
+	"github.com/google/uuid"
 )
 
 type APIConfig struct {
 	fileserverHits atomic.Int32
+	Queries        *database.Queries
+	Platform       string
 }
 
 func (cfg *APIConfig) MiddlewareMetricsInc(next http.Handler) http.Handler {
@@ -23,11 +26,16 @@ func (cfg *APIConfig) MiddlewareMetricsInc(next http.Handler) http.Handler {
 		next.ServeHTTP(w, r)
 	})
 }
-
 func (cfg *APIConfig) Reset(w http.ResponseWriter, r *http.Request) {
+	if cfg.Platform != "dev" {
+		w.WriteHeader(403)
+		return
+	}
 	cfg.fileserverHits.Store(0)
+	if err := cfg.Queries.DeleteAllUsers(r.Context()); err != nil {
+		log.Fatalln("could not reset users: %w", err)
+	}
 }
-
 func (cfg *APIConfig) HitCounterHandler(w http.ResponseWriter, r *http.Request) {
 	r.Header.Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(200)
@@ -39,56 +47,114 @@ func (cfg *APIConfig) HitCounterHandler(w http.ResponseWriter, r *http.Request) 
 		),
 	))
 }
-
-func ChripHandler(w http.ResponseWriter, r *http.Request) {
+func (cfg *APIConfig) CreateUserHandel(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	type input struct {
-		Body string `json:"body"`
-	}
-	type returnVals struct {
-		Error      error  `json:"error"`
-		CleandBody string `json:"cleaned_body"`
+		Email string `json:"email"`
 	}
 	decoder := json.NewDecoder(r.Body)
 	var params input
-	status := 200
-	respBody := returnVals{
-		Error:      nil,
-		CleandBody: "",
-	}
+	var user database.User
+	status := 201
 	if err := decoder.Decode(&params); err != nil {
-		respBody = returnVals{
-			Error:      fmt.Errorf("Something went wrong"),
-			CleandBody: "",
-		}
+		user = database.User{}
 		status = 400
 	}
-	log.Println(params.Body)
-	if len(params.Body) > 140 {
-		respBody = returnVals{
-			Error:      fmt.Errorf("Chirp is too long"),
-			CleandBody: "",
-		}
-		status = 400
-	} else {
-		var profaneWords = []string{"kerfuffle", "sharbert", "fornax"}
-		var profanityPattern *regexp.Regexp
-		wordPattern := strings.Join(profaneWords, "|")
-		regexString := "(?i)\\b(" + wordPattern + ")\\b"
-		profanityPattern = regexp.MustCompile(regexString)
-		cleaned := profanityPattern.ReplaceAllString(params.Body, "****")
-		respBody = returnVals{
-			Error:      nil,
-			CleandBody: cleaned,
-		}
-	}
-	dat, err := json.Marshal(respBody)
+	log.Println(params.Email)
+	user, err := cfg.Queries.CreateUser(r.Context(), params.Email)
 	if err != nil {
-		log.Printf("Error marshalling JSON: %s", err)
-		status = 500
+		log.Printf("could not create user: %s", err)
+	}
+	dat, err := json.Marshal(user)
+	if err != nil {
+		w.WriteHeader(500)
+		w.Write([]byte(fmt.Sprintf("Error marshalling JSON: %s", err)))
 		return
 	}
-	log.Println(respBody, "status:", status)
+	log.Println(user, "status:", status)
+	w.WriteHeader(status)
+	w.Write(dat)
+}
+func (cfg *APIConfig) GetChirps(w http.ResponseWriter, r *http.Request) {
+	chirps, err := cfg.Queries.GetChirps(r.Context())
+	status := 200
+	if err != nil {
+		w.WriteHeader(500)
+		w.Write(fmt.Appendf([]byte(""), "Error fetching chirps: %s", err))
+		return
+	}
+	dat, err := json.Marshal(chirps)
+	if err != nil {
+		w.WriteHeader(500)
+		w.Write(fmt.Appendf([]byte(""), "Error marshalling JSON: %s", err))
+		return
+	}
+	log.Println(chirps, "status:", status)
+	w.WriteHeader(status)
+	w.Write(dat)
+}
+func (cfg *APIConfig) GetChirp(w http.ResponseWriter, r *http.Request) {
+	chirpID := r.PathValue("chirp_id")
+	if chirpID == "" {
+		w.WriteHeader(400)
+		w.Write([]byte("please provide a chirp id to fetch"))
+		return
+	}
+	uuid, err := uuid.Parse(chirpID)
+	if err != nil {
+		w.WriteHeader(404)
+		w.Write(fmt.Appendf([]byte(""), "could not make id from parameter: %s", err))
+		return
+	}
+	chirps, err := cfg.Queries.GetChirpFromId(r.Context(), uuid)
+	status := 200
+	if err != nil {
+		w.WriteHeader(404)
+		w.Write(fmt.Appendf([]byte(""), "Error fetching chirps: %s", err))
+		return
+	}
+	dat, err := json.Marshal(chirps)
+	if err != nil {
+		w.WriteHeader(500)
+		w.Write(fmt.Appendf([]byte(""), "Error marshalling JSON: %s", err))
+		return
+	}
+	log.Println(chirps, "status:", status)
+	w.WriteHeader(status)
+	w.Write(dat)
+}
+func (cfg *APIConfig) Chirps(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	type input struct {
+		Body   string    `json:"body"`
+		UserID uuid.UUID `json:"user_id"`
+	}
+	decoder := json.NewDecoder(r.Body)
+	var params input
+	status := 201
+	if err := decoder.Decode(&params); err != nil {
+		w.Write(fmt.Appendf([]byte(""), "Error marshalling JSON: %s", err))
+		w.WriteHeader(500)
+		return
+	}
+	user, err := cfg.Queries.GetUserFromId(r.Context(), params.UserID)
+	if err != nil {
+		log.Printf("Could not get user from id: %s", params.UserID)
+	}
+	chirp, err := cfg.Queries.CreateChirp(r.Context(), database.CreateChirpParams{
+		Body:   params.Body,
+		UserID: user.ID,
+	})
+	if err != nil {
+		log.Printf("Could not create chirp (%s) from user: %s", params.Body, params.UserID)
+	}
+	dat, err := json.Marshal(chirp)
+	if err != nil {
+		w.WriteHeader(500)
+		w.Write(fmt.Appendf([]byte(""), "Error marshalling JSON: %w", err))
+		return
+	}
+	log.Println(chirp, "status:", status)
 	w.WriteHeader(status)
 	w.Write(dat)
 }
