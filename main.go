@@ -16,6 +16,7 @@ func main() {
 	servemux.Handle("/app/", http.StripPrefix("/app", apiC.MiddlewareMetricsInc(http.FileServer(http.Dir(".")))))
 	servemux.HandleFunc("GET /api/healthz", handlers.HealthCodeHandler)
 	servemux.HandleFunc("POST /api/users", apiC.CreateUserHandel)
+	servemux.HandleFunc("POST /api/login", apiC.LoginHandler)
 	servemux.HandleFunc("GET /admin/metrics", apiC.HitCounterHandler)
 	servemux.HandleFunc("GET /api/chirps", apiC.GetChirps)
 	servemux.HandleFunc("GET /api/chirps/{chirp_id}", apiC.GetChirp)

@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"sync/atomic"
 
+	"github.com/RemcoVeens/httpserver/internal/auth"
 	"github.com/RemcoVeens/httpserver/internal/database"
 	"github.com/google/uuid"
 )
@@ -28,7 +29,7 @@ func (cfg *APIConfig) MiddlewareMetricsInc(next http.Handler) http.Handler {
 }
 func (cfg *APIConfig) Reset(w http.ResponseWriter, r *http.Request) {
 	if cfg.Platform != "dev" {
-		w.WriteHeader(403)
+		w.WriteHeader(401)
 		return
 	}
 	cfg.fileserverHits.Store(0)
@@ -50,7 +51,8 @@ func (cfg *APIConfig) HitCounterHandler(w http.ResponseWriter, r *http.Request) 
 func (cfg *APIConfig) CreateUserHandel(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	type input struct {
-		Email string `json:"email"`
+		Email    string `json:"email"`
+		Password string `json:"password"`
 	}
 	decoder := json.NewDecoder(r.Body)
 	var params input
@@ -61,11 +63,79 @@ func (cfg *APIConfig) CreateUserHandel(w http.ResponseWriter, r *http.Request) {
 		status = 400
 	}
 	log.Println(params.Email)
-	user, err := cfg.Queries.CreateUser(r.Context(), params.Email)
+	pass, err := auth.HashPassword(params.Password)
+	if err != nil {
+		w.WriteHeader(500)
+		w.Write([]byte(fmt.Sprintf("could not hash password: %s", err)))
+		return
+	}
+	user, err = cfg.Queries.CreateUser(r.Context(), database.CreateUserParams{
+		Email:          params.Email,
+		HashedPassword: pass,
+	})
 	if err != nil {
 		log.Printf("could not create user: %s", err)
 	}
-	dat, err := json.Marshal(user)
+
+	tempJSON, _ := json.Marshal(user)
+	var m map[string]interface{}
+	json.Unmarshal(tempJSON, &m)
+	delete(m, "hashed_password")
+	dat, err := json.MarshalIndent(m, "", "  ")
+	if err != nil {
+		w.WriteHeader(500)
+		w.Write([]byte(fmt.Sprintf("Error marshalling JSON: %s", err)))
+		return
+	}
+	log.Println(user, "status:", status)
+	w.WriteHeader(status)
+	w.Write(dat)
+}
+func (cfg *APIConfig) LoginHandler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	type input struct {
+		Email    string `json:"email"`
+		Password string `json:"password"`
+	}
+	decoder := json.NewDecoder(r.Body)
+	var params input
+	var user database.User
+	status := 200
+	if err := decoder.Decode(&params); err != nil {
+		user = database.User{}
+		status = 400
+	}
+	log.Println(params.Email)
+	user, err := cfg.Queries.GetUserFromEmail(r.Context(), params.Email)
+	if err != nil {
+		w.WriteHeader(500)
+		w.Write([]byte(fmt.Sprintf("user not found: %s", err)))
+		return
+	}
+	hp, err := auth.HashPassword(params.Password)
+	if err != nil {
+		w.WriteHeader(500)
+		w.Write([]byte(fmt.Sprintf("could not hash : %s", err)))
+		return
+	}
+	ok, err := auth.CheckPasswordHash(params.Password, user.HashedPassword)
+	if err != nil {
+		w.WriteHeader(500)
+		w.Write([]byte(fmt.Sprintf("could not hash password: %s", err)))
+		return
+	}
+	if !ok {
+		log.Print(user.HashedPassword)
+		log.Print(hp)
+		w.WriteHeader(401)
+		w.Write([]byte(fmt.Sprintf("could not authenticate: %s", err)))
+		return
+	}
+	tempJSON, _ := json.Marshal(user)
+	var m map[string]interface{}
+	json.Unmarshal(tempJSON, &m)
+	delete(m, "hashed_password")
+	dat, err := json.MarshalIndent(m, "", "  ")
 	if err != nil {
 		w.WriteHeader(500)
 		w.Write([]byte(fmt.Sprintf("Error marshalling JSON: %s", err)))
