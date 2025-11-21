@@ -3,6 +3,8 @@ package auth
 import (
 	"errors"
 	"fmt"
+	"net/http"
+	"strings"
 	"time"
 
 	"github.com/alexedwards/argon2id"
@@ -22,7 +24,7 @@ func MakeJWT(userID uuid.UUID, tokenSecret string, expiresIn time.Duration) (str
 	tkn := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.RegisteredClaims{
 		Issuer:    "chirpy",
 		IssuedAt:  jwt.NewNumericDate(time.Now().UTC()),
-		ExpiresAt: jwt.NewNumericDate(time.Now().UTC().Add(expiresIn)),
+		ExpiresAt: jwt.NewNumericDate(time.Now().UTC().Add(expiresIn * time.Second)),
 		Subject:   userID.String(),
 	})
 	return tkn.SignedString([]byte(tokenSecret))
@@ -36,7 +38,7 @@ type CustomClaims struct {
 func ValidateJWT(tokenString, tokenSecret string) (uuid.UUID, error) {
 	claims := &CustomClaims{}
 
-	token, err := jwt.ParseWithClaims(tokenString, claims, func(token *jwt.Token) (interface{}, error) {
+	token, err := jwt.ParseWithClaims(tokenString, claims, func(token *jwt.Token) (any, error) {
 		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
 			return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
 		}
@@ -57,6 +59,12 @@ func ValidateJWT(tokenString, tokenSecret string) (uuid.UUID, error) {
 	return userID, nil
 }
 
-// func GetBearerToken(headers http.Header) (string, error) {
+func GetBearerToken(headers http.Header) (string, error) {
+	key := headers.Get("Authorization")
+	if key == "" {
+		return key, fmt.Errorf("field was empty/not found")
+	}
+	key = strings.Join(strings.Split(key, " ")[1:], " ")
+	return key, nil
 
-// }
+}

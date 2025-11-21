@@ -11,7 +11,7 @@ import (
 
 func main() {
 	var apiC handlers.APIConfig
-	apiC.Queries, apiC.Platform = database.LoadDB()
+	apiC.Queries, apiC.Platform, apiC.Secret = database.LoadDB()
 	servemux := http.NewServeMux()
 	servemux.Handle("/app/", http.StripPrefix("/app", apiC.MiddlewareMetricsInc(http.FileServer(http.Dir(".")))))
 	servemux.HandleFunc("GET /api/healthz", handlers.HealthCodeHandler)

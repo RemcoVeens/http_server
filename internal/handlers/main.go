@@ -6,6 +6,7 @@ import (
 	"log"
 	"net/http"
 	"sync/atomic"
+	"time"
 
 	"github.com/RemcoVeens/httpserver/internal/auth"
 	"github.com/RemcoVeens/httpserver/internal/database"
@@ -16,6 +17,7 @@ type APIConfig struct {
 	fileserverHits atomic.Int32
 	Queries        *database.Queries
 	Platform       string
+	Secret         string
 }
 
 func (cfg *APIConfig) MiddlewareMetricsInc(next http.Handler) http.Handler {
@@ -92,8 +94,9 @@ func (cfg *APIConfig) CreateUserHandel(w http.ResponseWriter, r *http.Request) {
 func (cfg *APIConfig) LoginHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	type input struct {
-		Email    string `json:"email"`
-		Password string `json:"password"`
+		Email            string `json:"email"`
+		Password         string `json:"password"`
+		ExpiresInSeconds int    `json:"expires_in_seconds,omitempty"`
 	}
 	decoder := json.NewDecoder(r.Body)
 	var params input
@@ -102,6 +105,9 @@ func (cfg *APIConfig) LoginHandler(w http.ResponseWriter, r *http.Request) {
 	if err := decoder.Decode(&params); err != nil {
 		user = database.User{}
 		status = 400
+	}
+	if params.ExpiresInSeconds == 0 {
+		params.ExpiresInSeconds = 3600
 	}
 	log.Println(params.Email)
 	user, err := cfg.Queries.GetUserFromEmail(r.Context(), params.Email)
@@ -129,10 +135,17 @@ func (cfg *APIConfig) LoginHandler(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte(fmt.Sprintf("could not authenticate: %s", err)))
 		return
 	}
+	jwtToken, err := auth.MakeJWT(user.ID, cfg.Secret, time.Duration(params.ExpiresInSeconds))
+	if err != nil {
+		w.WriteHeader(500)
+		w.Write([]byte(fmt.Sprintf("Error making jwt token: %s", err)))
+		return
+	}
 	tempJSON, _ := json.Marshal(user)
 	var m map[string]interface{}
 	json.Unmarshal(tempJSON, &m)
 	delete(m, "hashed_password")
+	m["token"] = jwtToken
 	dat, err := json.MarshalIndent(m, "", "  ")
 	if err != nil {
 		w.WriteHeader(500)
@@ -194,8 +207,7 @@ func (cfg *APIConfig) GetChirp(w http.ResponseWriter, r *http.Request) {
 func (cfg *APIConfig) Chirps(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	type input struct {
-		Body   string    `json:"body"`
-		UserID uuid.UUID `json:"user_id"`
+		Body string `json:"body"`
 	}
 	decoder := json.NewDecoder(r.Body)
 	var params input
@@ -205,16 +217,29 @@ func (cfg *APIConfig) Chirps(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(500)
 		return
 	}
-	user, err := cfg.Queries.GetUserFromId(r.Context(), params.UserID)
+	token_string, err := auth.GetBearerToken(r.Header)
 	if err != nil {
-		log.Printf("Could not get user from id: %s", params.UserID)
+		w.WriteHeader(403)
+		w.Write(fmt.Appendf([]byte(""), "Could not get token: %s", err))
+		return
+	}
+	UserID, err := auth.ValidateJWT(token_string, cfg.Secret)
+	if err != nil {
+		w.WriteHeader(401)
+		w.Write(fmt.Appendf([]byte(""), "Validation error: %s", err))
+		return
+	}
+
+	user, err := cfg.Queries.GetUserFromId(r.Context(), UserID)
+	if err != nil {
+		log.Printf("Could not get user from id: %s", UserID)
 	}
 	chirp, err := cfg.Queries.CreateChirp(r.Context(), database.CreateChirpParams{
 		Body:   params.Body,
 		UserID: user.ID,
 	})
 	if err != nil {
-		log.Printf("Could not create chirp (%s) from user: %s", params.Body, params.UserID)
+		log.Printf("Could not create chirp (%s) from user: %s", params.Body, UserID)
 	}
 	dat, err := json.Marshal(chirp)
 	if err != nil {
