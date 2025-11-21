@@ -42,10 +42,8 @@ func (cfg *APIConfig) HitCounterHandler(w http.ResponseWriter, r *http.Request) 
 	w.WriteHeader(200)
 	w.Write(fmt.Appendf(
 		[]byte(""),
-		fmt.Sprintf(
-			"<html><body><h1>Welcome, Chirpy Admin</h1><p>Chirpy has been visited %d times!</p></body></html>",
-			cfg.fileserverHits.Load(),
-		),
+		"<html><body><h1>Welcome, Chirpy Admin</h1><p>Chirpy has been visited %d times!</p></body></html>",
+		cfg.fileserverHits.Load(),
 	))
 }
 func (cfg *APIConfig) CreateUserHandel(w http.ResponseWriter, r *http.Request) {
@@ -221,7 +219,7 @@ func (cfg *APIConfig) Chirps(w http.ResponseWriter, r *http.Request) {
 	dat, err := json.Marshal(chirp)
 	if err != nil {
 		w.WriteHeader(500)
-		w.Write(fmt.Appendf([]byte(""), "Error marshalling JSON: %w", err))
+		w.Write(fmt.Appendf([]byte(""), "Error marshalling JSON: %s", err))
 		return
 	}
 	log.Println(chirp, "status:", status)
