@@ -1,6 +1,8 @@
 package auth
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"net/http"
@@ -30,12 +32,11 @@ func MakeJWT(userID uuid.UUID, tokenSecret string, expiresIn time.Duration) (str
 	return tkn.SignedString([]byte(tokenSecret))
 }
 
-type CustomClaims struct {
-	jwt.RegisteredClaims
-	UserID string `json:"user_id"`
-}
-
 func ValidateJWT(tokenString, tokenSecret string) (uuid.UUID, error) {
+	type CustomClaims struct {
+		jwt.RegisteredClaims
+		UserID string `json:"user_id"`
+	}
 	claims := &CustomClaims{}
 
 	token, err := jwt.ParseWithClaims(tokenString, claims, func(token *jwt.Token) (any, error) {
@@ -66,5 +67,11 @@ func GetBearerToken(headers http.Header) (string, error) {
 	}
 	key = strings.Join(strings.Split(key, " ")[1:], " ")
 	return key, nil
+}
 
+func MakeRefreshToken() (string, error) {
+	key := make([]byte, 32)
+	rand.Read(key)
+	keyString := hex.EncodeToString([]byte(key))
+	return keyString, nil
 }

@@ -20,6 +20,8 @@ func main() {
 	servemux.HandleFunc("GET /admin/metrics", apiC.HitCounterHandler)
 	servemux.HandleFunc("GET /api/chirps", apiC.GetChirps)
 	servemux.HandleFunc("GET /api/chirps/{chirp_id}", apiC.GetChirp)
+	servemux.HandleFunc("POST /api/refresh", apiC.RefreshHandel)
+	servemux.HandleFunc("POST /api/revoke", apiC.RevokeHandel)
 	servemux.HandleFunc("POST /api/chirps", apiC.Chirps)
 	servemux.HandleFunc("POST /admin/reset", apiC.Reset)
 	server := http.Server{

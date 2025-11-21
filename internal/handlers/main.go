@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -94,9 +95,8 @@ func (cfg *APIConfig) CreateUserHandel(w http.ResponseWriter, r *http.Request) {
 func (cfg *APIConfig) LoginHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	type input struct {
-		Email            string `json:"email"`
-		Password         string `json:"password"`
-		ExpiresInSeconds int    `json:"expires_in_seconds,omitempty"`
+		Email    string `json:"email"`
+		Password string `json:"password"`
 	}
 	decoder := json.NewDecoder(r.Body)
 	var params input
@@ -106,50 +106,55 @@ func (cfg *APIConfig) LoginHandler(w http.ResponseWriter, r *http.Request) {
 		user = database.User{}
 		status = 400
 	}
-	if params.ExpiresInSeconds == 0 {
-		params.ExpiresInSeconds = 3600
-	}
 	log.Println(params.Email)
 	user, err := cfg.Queries.GetUserFromEmail(r.Context(), params.Email)
 	if err != nil {
 		w.WriteHeader(500)
-		w.Write([]byte(fmt.Sprintf("user not found: %s", err)))
+		w.Write(fmt.Appendf([]byte(""), "user not found: %s", err))
 		return
 	}
 	hp, err := auth.HashPassword(params.Password)
 	if err != nil {
 		w.WriteHeader(500)
-		w.Write([]byte(fmt.Sprintf("could not hash : %s", err)))
+		w.Write(fmt.Appendf([]byte(""), "could not hash : %s", err))
 		return
 	}
 	ok, err := auth.CheckPasswordHash(params.Password, user.HashedPassword)
 	if err != nil {
 		w.WriteHeader(500)
-		w.Write([]byte(fmt.Sprintf("could not hash password: %s", err)))
+		w.Write(fmt.Appendf([]byte(""), "could not hash password: %s", err))
 		return
 	}
 	if !ok {
 		log.Print(user.HashedPassword)
 		log.Print(hp)
 		w.WriteHeader(401)
-		w.Write([]byte(fmt.Sprintf("could not authenticate: %s", err)))
+		w.Write(fmt.Appendf([]byte(""), "could not authenticate: %s", err))
 		return
 	}
-	jwtToken, err := auth.MakeJWT(user.ID, cfg.Secret, time.Duration(params.ExpiresInSeconds))
+	jwtToken, err := auth.MakeJWT(user.ID, cfg.Secret, time.Duration(3600))
 	if err != nil {
 		w.WriteHeader(500)
-		w.Write([]byte(fmt.Sprintf("Error making jwt token: %s", err)))
+		w.Write(fmt.Appendf([]byte(""), "Error making jwt token: %s", err))
 		return
 	}
 	tempJSON, _ := json.Marshal(user)
-	var m map[string]interface{}
+	RToken, _ := auth.MakeRefreshToken()
+	RefToken, err := cfg.Queries.GenerateToken(r.Context(), database.GenerateTokenParams{
+		Token:     RToken,
+		UserID:    user.ID,
+		ExpiresAt: time.Now().AddDate(0, 0, 60),
+		RevokedAt: sql.NullTime{Time: time.Time{}, Valid: false},
+	})
+	var m map[string]any
 	json.Unmarshal(tempJSON, &m)
 	delete(m, "hashed_password")
 	m["token"] = jwtToken
+	m["refresh_token"] = RefToken.Token
 	dat, err := json.MarshalIndent(m, "", "  ")
 	if err != nil {
 		w.WriteHeader(500)
-		w.Write([]byte(fmt.Sprintf("Error marshalling JSON: %s", err)))
+		w.Write(fmt.Appendf([]byte(""), "Error marshalling JSON: %s", err))
 		return
 	}
 	log.Println(user, "status:", status)
@@ -251,7 +256,63 @@ func (cfg *APIConfig) Chirps(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(status)
 	w.Write(dat)
 }
-
+func (cfg *APIConfig) RefreshHandel(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	status := 200
+	tokn, err := auth.GetBearerToken(r.Header)
+	if err != nil {
+		w.WriteHeader(401)
+		w.Write(fmt.Appendf([]byte(""), "Error getting token: %s", err))
+		return
+	}
+	tkn, err := cfg.Queries.GetTokenFromToken(r.Context(), tokn)
+	if err != nil {
+		w.WriteHeader(401)
+		w.Write(fmt.Appendf([]byte(""), "Error getting token: %s", err))
+		return
+	}
+	if tkn.RevokedAt.Valid {
+		w.WriteHeader(401)
+		w.Write(fmt.Appendf([]byte(""), "token Expired"))
+		return
+	}
+	user, err := cfg.Queries.GetUserFromRefreshToken(r.Context(), tkn.Token)
+	if err != nil {
+		w.WriteHeader(401)
+		w.Write(fmt.Appendf([]byte(""), "Error getting token: %s", err))
+		return
+	}
+	w.WriteHeader(status)
+	type response struct {
+		Token string `json:"token"`
+	}
+	new_token, err := auth.MakeJWT(user.ID, cfg.Secret, 3600)
+	dat, err := json.Marshal(response{
+		Token: new_token,
+	})
+	if err != nil {
+		w.WriteHeader(500)
+		w.Write(fmt.Appendf([]byte(""), "Error marshalling JSON: %s", err))
+		return
+	}
+	w.Write(dat)
+}
+func (cfg *APIConfig) RevokeHandel(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	tokn, err := auth.GetBearerToken(r.Header)
+	if err != nil {
+		w.WriteHeader(401)
+		w.Write(fmt.Appendf([]byte(""), "Error getting token: %s", err))
+		return
+	}
+	err = cfg.Queries.RevokeToken(r.Context(), tokn)
+	if err != nil {
+		w.WriteHeader(500)
+		w.Write(fmt.Appendf([]byte(""), "could not revoke token: %s", err))
+		return
+	}
+	w.WriteHeader(204)
+}
 func HealthCodeHandler(w http.ResponseWriter, r *http.Request) {
 	r.Header.Set("Content-Type", "text/plain; charset=utf-8")
 	w.WriteHeader(200)
