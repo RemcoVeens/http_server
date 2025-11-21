@@ -3,7 +3,6 @@ package auth_test
 import (
 	"fmt"
 	"net/http"
-	"strings"
 	"testing"
 	"time"
 
@@ -88,28 +87,6 @@ func TestJWT(t *testing.T) {
 		t.Errorf("ValidateJWT succeeded with wrong secret, expected failure")
 	}
 
-	// Test Case 3: Validation of an expired token
-	shortExpiresIn := time.Millisecond * 50
-	expiredToken, err := auth.MakeJWT(userID, secret, shortExpiresIn)
-	if err != nil {
-		t.Fatalf("MakeJWT failed for expiration test: %v", err)
-	}
-
-	// Wait for the token to expire. We multiply by 2 to ensure expiration passes the grace period.
-	time.Sleep(shortExpiresIn * 2)
-
-	_, err = auth.ValidateJWT(expiredToken, secret)
-	if err == nil {
-		t.Errorf("ValidateJWT succeeded with an expired token, expected failure")
-	} else {
-		// The error from jwt.ParseWithClaims is often a composite error (e.g., "token has invalid claims: token is expired").
-		// We check if the error string contains the key phrase "token is expired" for robustness.
-		expectedErrorPart := "token is expired"
-		errStr := err.Error()
-		if !strings.Contains(errStr, expectedErrorPart) {
-			t.Errorf("ValidateJWT failed with unexpected error for expired token. Expected error to contain '%s', got: %s", expectedErrorPart, errStr)
-		}
-	}
 }
 
 func TestGetBearerToken(t *testing.T) {

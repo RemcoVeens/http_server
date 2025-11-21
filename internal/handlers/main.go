@@ -49,6 +49,70 @@ func (cfg *APIConfig) HitCounterHandler(w http.ResponseWriter, r *http.Request) 
 		cfg.fileserverHits.Load(),
 	))
 }
+func (cfg *APIConfig) UpdateUserHandel(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	tokn, err := auth.GetBearerToken(r.Header)
+	type input struct {
+		Email    string `json:"email"`
+		Password string `json:"password"`
+	}
+	decoder := json.NewDecoder(r.Body)
+	var params input
+	status := 200
+	if err := decoder.Decode(&params); err != nil {
+		w.WriteHeader(401)
+		w.Write(fmt.Appendf([]byte(""), "Error getting user input: %s", err))
+		return
+	}
+
+	if err != nil {
+		w.WriteHeader(401)
+		w.Write(fmt.Appendf([]byte(""), "Error getting token: %s", err))
+		return
+	}
+	user_id, err := auth.ValidateJWT(tokn, cfg.Secret)
+	if err != nil {
+		w.WriteHeader(401)
+		w.Write(fmt.Appendf([]byte(""), "Error validation: %s", err))
+		return
+	}
+	user, err := cfg.Queries.GetUserFromId(r.Context(), user_id)
+	if err != nil {
+		w.WriteHeader(401)
+		w.Write(fmt.Appendf([]byte(""), "Error getting user from id: %s", err))
+		return
+	}
+	hp, err := auth.HashPassword(params.Password)
+	if err != nil {
+		w.WriteHeader(500)
+		w.Write(fmt.Appendf([]byte(""), "error hasing password: %s", err))
+		return
+	}
+	if err = cfg.Queries.UpdateUser(r.Context(), database.UpdateUserParams{
+		Email:          params.Email,
+		HashedPassword: hp,
+		ID:             user_id,
+	}); err != nil {
+		w.WriteHeader(500)
+		w.Write(fmt.Appendf([]byte(""), "could not update user: %s", err))
+		return
+	}
+	NewUser, err := cfg.Queries.GetUserFromEmail(r.Context(), params.Email)
+	if err != nil {
+		w.WriteHeader(500)
+		w.Write(fmt.Appendf([]byte(""), "could not get updated user: %s", err))
+		return
+	}
+	var m map[string]any
+	tempJSON, _ := json.Marshal(NewUser)
+	json.Unmarshal(tempJSON, &m)
+	delete(m, "hashed_password")
+	dat, err := json.MarshalIndent(m, "", "  ")
+	log.Println(user.Email, "status:", status)
+	w.WriteHeader(status)
+	w.Write(dat)
+
+}
 func (cfg *APIConfig) CreateUserHandel(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	type input struct {
