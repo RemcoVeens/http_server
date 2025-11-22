@@ -17,10 +17,8 @@ import (
 func HashPassword(password string) (string, error) {
 	return argon2id.CreateHash(password, argon2id.DefaultParams)
 }
-
 func CheckPasswordHash(password, hash string) (bool, error) {
 	return argon2id.ComparePasswordAndHash(password, hash)
-
 }
 func MakeJWT(userID uuid.UUID, tokenSecret string, expiresIn time.Duration) (string, error) {
 	tkn := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.RegisteredClaims{
@@ -31,7 +29,6 @@ func MakeJWT(userID uuid.UUID, tokenSecret string, expiresIn time.Duration) (str
 	})
 	return tkn.SignedString([]byte(tokenSecret))
 }
-
 func ValidateJWT(tokenString, tokenSecret string) (uuid.UUID, error) {
 	type CustomClaims struct {
 		jwt.RegisteredClaims
@@ -59,7 +56,6 @@ func ValidateJWT(tokenString, tokenSecret string) (uuid.UUID, error) {
 	}
 	return userID, nil
 }
-
 func GetBearerToken(headers http.Header) (string, error) {
 	key := headers.Get("Authorization")
 	if key == "" {
@@ -68,10 +64,17 @@ func GetBearerToken(headers http.Header) (string, error) {
 	key = strings.Join(strings.Split(key, " ")[1:], " ")
 	return key, nil
 }
-
 func MakeRefreshToken() (string, error) {
 	key := make([]byte, 32)
 	rand.Read(key)
 	keyString := hex.EncodeToString([]byte(key))
 	return keyString, nil
+}
+func GetAPIKey(headers http.Header) (string, error) {
+	ApiKey := headers.Get("Authorization")
+	if ApiKey == "" {
+		return ApiKey, fmt.Errorf("field was empty/not found")
+	}
+	ApiKey = strings.Join(strings.Split(ApiKey, " ")[1:], " ")
+	return ApiKey, nil
 }

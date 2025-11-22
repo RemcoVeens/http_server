@@ -19,8 +19,17 @@ type APIConfig struct {
 	Queries        *database.Queries
 	Platform       string
 	Secret         string
+	PolkaKey       string
 }
 
+func (cfg *APIConfig) GetUserFromBearerToken(r *http.Request) (database.User, error) {
+	tokn, err := auth.GetBearerToken(r.Header)
+	user_id, err := auth.ValidateJWT(tokn, cfg.Secret)
+	if err != nil {
+		return database.User{}, fmt.Errorf("could not get user from token: %w", err)
+	}
+	return cfg.Queries.GetUserFromId(r.Context(), user_id)
+}
 func (cfg *APIConfig) MiddlewareMetricsInc(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Safely increment the counter using Add(1).
@@ -51,7 +60,6 @@ func (cfg *APIConfig) HitCounterHandler(w http.ResponseWriter, r *http.Request) 
 }
 func (cfg *APIConfig) UpdateUserHandel(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
-	tokn, err := auth.GetBearerToken(r.Header)
 	type input struct {
 		Email    string `json:"email"`
 		Password string `json:"password"`
@@ -64,22 +72,10 @@ func (cfg *APIConfig) UpdateUserHandel(w http.ResponseWriter, r *http.Request) {
 		w.Write(fmt.Appendf([]byte(""), "Error getting user input: %s", err))
 		return
 	}
-
+	user, err := cfg.GetUserFromBearerToken(r)
 	if err != nil {
 		w.WriteHeader(401)
-		w.Write(fmt.Appendf([]byte(""), "Error getting token: %s", err))
-		return
-	}
-	user_id, err := auth.ValidateJWT(tokn, cfg.Secret)
-	if err != nil {
-		w.WriteHeader(401)
-		w.Write(fmt.Appendf([]byte(""), "Error validation: %s", err))
-		return
-	}
-	user, err := cfg.Queries.GetUserFromId(r.Context(), user_id)
-	if err != nil {
-		w.WriteHeader(401)
-		w.Write(fmt.Appendf([]byte(""), "Error getting user from id: %s", err))
+		w.Write(fmt.Appendf([]byte(""), "Error getting user: %s", err))
 		return
 	}
 	hp, err := auth.HashPassword(params.Password)
@@ -91,7 +87,7 @@ func (cfg *APIConfig) UpdateUserHandel(w http.ResponseWriter, r *http.Request) {
 	if err = cfg.Queries.UpdateUser(r.Context(), database.UpdateUserParams{
 		Email:          params.Email,
 		HashedPassword: hp,
-		ID:             user_id,
+		ID:             user.ID,
 	}); err != nil {
 		w.WriteHeader(500)
 		w.Write(fmt.Appendf([]byte(""), "could not update user: %s", err))
@@ -126,7 +122,6 @@ func (cfg *APIConfig) CreateUserHandel(w http.ResponseWriter, r *http.Request) {
 		user = database.User{}
 		status = 400
 	}
-	log.Println(params.Email)
 	pass, err := auth.HashPassword(params.Password)
 	if err != nil {
 		w.WriteHeader(500)
@@ -151,7 +146,7 @@ func (cfg *APIConfig) CreateUserHandel(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte(fmt.Sprintf("Error marshalling JSON: %s", err)))
 		return
 	}
-	log.Println(user, "status:", status)
+	log.Println(user.Email, "has justy been created. status:", status)
 	w.WriteHeader(status)
 	w.Write(dat)
 }
@@ -169,7 +164,6 @@ func (cfg *APIConfig) LoginHandler(w http.ResponseWriter, r *http.Request) {
 		user = database.User{}
 		status = 400
 	}
-	log.Println(params.Email)
 	user, err := cfg.Queries.GetUserFromEmail(r.Context(), params.Email)
 	if err != nil {
 		w.WriteHeader(500)
@@ -220,7 +214,7 @@ func (cfg *APIConfig) LoginHandler(w http.ResponseWriter, r *http.Request) {
 		w.Write(fmt.Appendf([]byte(""), "Error marshalling JSON: %s", err))
 		return
 	}
-	log.Println(user, "status:", status)
+	log.Println(params.Email, "just logged in")
 	w.WriteHeader(status)
 	w.Write(dat)
 }
@@ -238,7 +232,6 @@ func (cfg *APIConfig) GetChirps(w http.ResponseWriter, r *http.Request) {
 		w.Write(fmt.Appendf([]byte(""), "Error marshalling JSON: %s", err))
 		return
 	}
-	log.Println(chirps, "status:", status)
 	w.WriteHeader(status)
 	w.Write(dat)
 }
@@ -268,7 +261,6 @@ func (cfg *APIConfig) GetChirp(w http.ResponseWriter, r *http.Request) {
 		w.Write(fmt.Appendf([]byte(""), "Error marshalling JSON: %s", err))
 		return
 	}
-	log.Println(chirps, "status:", status)
 	w.WriteHeader(status)
 	w.Write(dat)
 }
@@ -328,7 +320,6 @@ func (cfg *APIConfig) RemoveChirp(w http.ResponseWriter, r *http.Request) {
 		w.Write(fmt.Appendf([]byte(""), "Error deleting chirp: %s", err))
 		return
 	}
-	log.Println(chirp, "status:", status)
 	w.WriteHeader(status)
 	w.Write(dat)
 }
@@ -375,34 +366,16 @@ func (cfg *APIConfig) Chirps(w http.ResponseWriter, r *http.Request) {
 		w.Write(fmt.Appendf([]byte(""), "Error marshalling JSON: %s", err))
 		return
 	}
-	log.Println(chirp, "status:", status)
 	w.WriteHeader(status)
 	w.Write(dat)
 }
 func (cfg *APIConfig) RefreshHandel(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	status := 200
-	tokn, err := auth.GetBearerToken(r.Header)
+	user, err := cfg.GetUserFromBearerToken(r)
 	if err != nil {
 		w.WriteHeader(401)
-		w.Write(fmt.Appendf([]byte(""), "Error getting token: %s", err))
-		return
-	}
-	tkn, err := cfg.Queries.GetTokenFromToken(r.Context(), tokn)
-	if err != nil {
-		w.WriteHeader(401)
-		w.Write(fmt.Appendf([]byte(""), "Error getting token: %s", err))
-		return
-	}
-	if tkn.RevokedAt.Valid {
-		w.WriteHeader(401)
-		w.Write(fmt.Appendf([]byte(""), "token Expired"))
-		return
-	}
-	user, err := cfg.Queries.GetUserFromRefreshToken(r.Context(), tkn.Token)
-	if err != nil {
-		w.WriteHeader(401)
-		w.Write(fmt.Appendf([]byte(""), "Error getting token: %s", err))
+		w.Write(fmt.Appendf([]byte(""), "Error getting user: %s", err))
 		return
 	}
 	w.WriteHeader(status)
@@ -435,6 +408,62 @@ func (cfg *APIConfig) RevokeHandel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(204)
+}
+func (cfg *APIConfig) PolkaWebhook(w http.ResponseWriter, r *http.Request) {
+	type input struct {
+		Event string `json:"event"`
+		Data  struct {
+			UserID string `json:"user_id"`
+		} `json:"data"`
+	}
+	var params input
+	if err := json.NewDecoder(r.Body).Decode(&params); err != nil {
+		w.WriteHeader(500)
+		w.Write(fmt.Appendf([]byte(""), "Error paring input: %s", err))
+		return
+	}
+	polkaApiKey, err := auth.GetAPIKey(r.Header)
+	if err != nil {
+		w.WriteHeader(401)
+		w.Write(fmt.Appendf([]byte(""), "Error getting API key: %s", err))
+		return
+	}
+	log.Printf("%s and %s", polkaApiKey, cfg.PolkaKey)
+	if polkaApiKey != cfg.PolkaKey {
+		w.WriteHeader(401)
+		w.Write([]byte("Invalid API key"))
+		return
+	}
+	switch params.Event {
+	case "user.upgraded":
+		userID, err := uuid.Parse(params.Data.UserID)
+		if err != nil {
+			w.WriteHeader(500)
+			w.Write(fmt.Appendf([]byte(""), "Error parsing user ID: %s", err))
+			return
+		}
+		user, err := cfg.Queries.GetUserFromId(r.Context(), userID)
+		if err != nil {
+			w.WriteHeader(404)
+			w.Write(fmt.Appendf([]byte(""), "Error getting user: %s", err))
+			return
+		}
+		err = cfg.Queries.UpgradeUserFromID(r.Context(), user.ID)
+		if err != nil {
+			w.WriteHeader(500)
+			w.Write(fmt.Appendf([]byte(""), "Error upgrading user: %s", err))
+			return
+		}
+		log.Printf("upgraded %s to red!", user.Email)
+		w.WriteHeader(204)
+		w.Write(fmt.Appendf([]byte(""), "user(%s) has been upgrade", user.Email))
+		return
+	default:
+		w.WriteHeader(204)
+		w.Write(fmt.Appendf([]byte(""), "Unknown event: %s", params.Event))
+		return
+
+	}
 }
 func HealthCodeHandler(w http.ResponseWriter, r *http.Request) {
 	r.Header.Set("Content-Type", "text/plain; charset=utf-8")
