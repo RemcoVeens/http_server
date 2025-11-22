@@ -111,7 +111,6 @@ func (cfg *APIConfig) UpdateUserHandel(w http.ResponseWriter, r *http.Request) {
 	log.Println(user.Email, "status:", status)
 	w.WriteHeader(status)
 	w.Write(dat)
-
 }
 func (cfg *APIConfig) CreateUserHandel(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
@@ -270,6 +269,66 @@ func (cfg *APIConfig) GetChirp(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	log.Println(chirps, "status:", status)
+	w.WriteHeader(status)
+	w.Write(dat)
+}
+func (cfg *APIConfig) RemoveChirp(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	status := 204
+	chirpID := r.PathValue("chirpID")
+	if chirpID == "" {
+		w.WriteHeader(400)
+		w.Write([]byte("please provide a chirp id to delete"))
+		return
+	}
+	uuid, err := uuid.Parse(chirpID)
+	if err != nil {
+		w.WriteHeader(404)
+		w.Write(fmt.Appendf([]byte(""), "could not process id: %v", err))
+		return
+	}
+	chirp, err := cfg.Queries.GetChirpFromId(r.Context(), uuid)
+	if err != nil {
+		w.WriteHeader(404)
+		w.Write(fmt.Appendf([]byte(""), "Error fetching chirps: %s", err))
+		return
+	}
+	dat, err := json.Marshal(chirp)
+	if err != nil {
+		w.WriteHeader(500)
+		w.Write(fmt.Appendf([]byte(""), "Error marshalling JSON: %s", err))
+		return
+	}
+	tokn, err := auth.GetBearerToken(r.Header)
+	if err != nil {
+		w.WriteHeader(401)
+		w.Write(fmt.Appendf([]byte(""), "Error getting token: %s", err))
+		return
+	}
+	user_id, err := auth.ValidateJWT(tokn, cfg.Secret)
+	if err != nil {
+		w.WriteHeader(401)
+		w.Write(fmt.Appendf([]byte(""), "Error validation: %s", err))
+		return
+	}
+	user, err := cfg.Queries.GetUserFromId(r.Context(), user_id)
+	if err != nil {
+		w.WriteHeader(401)
+		w.Write(fmt.Appendf([]byte(""), "Error getting user from id: %s", err))
+		return
+	}
+	if user.ID != chirp.UserID {
+		w.WriteHeader(403)
+		w.Write(fmt.Appendf([]byte(""), "This is not yours to delete"))
+		return
+	}
+	err = cfg.Queries.DeleteChirpFromID(r.Context(), chirp.ID)
+	if err != nil {
+		w.WriteHeader(500)
+		w.Write(fmt.Appendf([]byte(""), "Error deleting chirp: %s", err))
+		return
+	}
+	log.Println(chirp, "status:", status)
 	w.WriteHeader(status)
 	w.Write(dat)
 }
