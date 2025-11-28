@@ -219,7 +219,35 @@ func (cfg *APIConfig) LoginHandler(w http.ResponseWriter, r *http.Request) {
 	w.Write(dat)
 }
 func (cfg *APIConfig) GetChirps(w http.ResponseWriter, r *http.Request) {
-	chirps, err := cfg.Queries.GetChirps(r.Context())
+	AuthorID := r.URL.Query().Get("author_id")
+	Sort := r.URL.Query().Get("sort")
+	var Order string
+	switch Sort {
+	case "asc":
+		Order = "asc"
+	case "desc":
+		Order = "desc"
+	default:
+		Order = "asc"
+	}
+	var err error
+	var chirps []database.Chirp
+	if AuthorID == "" {
+		chirps, err = cfg.Queries.GetChirps(r.Context())
+	} else {
+		userId, err := uuid.Parse(AuthorID)
+		if err != nil {
+			w.WriteHeader(400)
+			w.Write(fmt.Appendf([]byte(""), "Error parsing author id: %s", err))
+			return
+		}
+		chirps, err = cfg.Queries.GetChirpsFromAuthorID(r.Context(), userId)
+	}
+	if Order == "desc" {
+		for i, j := 0, len(chirps)-1; i < j; i, j = i+1, j-1 {
+			chirps[i], chirps[j] = chirps[j], chirps[i]
+		}
+	}
 	status := 200
 	if err != nil {
 		w.WriteHeader(500)
